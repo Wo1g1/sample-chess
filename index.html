@@ -11,8 +11,881 @@
 </head>
 <body>
   <div id="root"></div>
-  <script type="text/babel" src="./VariantChess.jsx"></script>
   <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // 기물 상수
+    const EMPTY = 0;
+    const W_PAWN = 1, W_KNIGHT = 2, W_BISHOP = 3, W_ROOK = 4;
+    const W_LEAPER = 5, W_QUEEN = 6, W_KING = 7, W_GENERAL = 8;
+    const B_PAWN = -1, B_KNIGHT = -2, B_BISHOP = -3, B_ROOK = -4;
+    const B_LEAPER = -5, B_QUEEN = -6, B_KING = -7, B_GENERAL = -8;
+
+    const PIECE_NAMES = {
+      1: 'P', 2: 'N', 3: 'B', 4: 'R', 5: 'L', 6: 'Q', 7: 'K', 8: 'G',
+      [-1]: 'P', [-2]: 'N', [-3]: 'B', [-4]: 'R', [-5]: 'L', [-6]: 'Q', [-7]: 'K', [-8]: 'G'
+    };
+
+    const DIRECTIONS_8 = [[0,1],[1,0],[0,-1],[-1,0],[1,1],[1,-1],[-1,1],[-1,-1]];
+    const DIRECTIONS_4_ORTHO = [[0,1],[1,0],[0,-1],[-1,0]];
+    const DIRECTIONS_4_DIAG = [[1,1],[1,-1],[-1,1],[-1,-1]];
+    const KNIGHT_MOVES = [[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]];
+
+    // 기물 가치
+    const PIECE_VALUES = {
+      [W_PAWN]: 1.5, [W_KNIGHT]: 3.5, [W_BISHOP]: 4.5, [W_ROOK]: 4.5,
+      [W_LEAPER]: 5.0, [W_QUEEN]: 6.5, [W_GENERAL]: 4.0, [W_KING]: 0,
+      [B_PAWN]: -1.5, [B_KNIGHT]: -3.5, [B_BISHOP]: -4.5, [B_ROOK]: -4.5,
+      [B_LEAPER]: -5.0, [B_QUEEN]: -6.5, [B_GENERAL]: -4.0, [B_KING]: 0,
+      [EMPTY]: 0
+    };
+
+    const CENTER_SQUARES = new Set(['2,2', '2,3', '3,2', '3,3']);
+    const SEMI_CENTER = new Set(['1,2', '1,3', '2,1', '2,4', '3,1', '3,4', '4,2', '4,3']);
+
+    const VariantChess = () => {
+      const initialBoard = createInitialBoard();
+      const [gameMode, setGameMode] = useState(null);
+      const [playerColor, setPlayerColor] = useState(null);
+      const [board, setBoard] = useState(initialBoard);
+      const [turn, setTurn] = useState(1);
+      const [selectedSquare, setSelectedSquare] = useState(null);
+      const [legalMoves, setLegalMoves] = useState([]);
+      const [moveHistory, setMoveHistory] = useState([]);
+      const [boardHistory, setBoardHistory] = useState([initialBoard]);
+      const [turnHistory, setTurnHistory] = useState([1]);
+      const [positionHistory, setPositionHistory] = useState([getPositionHash(initialBoard)]);
+      const [halfmoveClock, setHalfmoveClock] = useState(0);
+      const [halfmoveHistory, setHalfmoveHistory] = useState([0]);
+      const [gameOver, setGameOver] = useState(null);
+      const [isAiThinking, setIsAiThinking] = useState(false);
+
+      function createInitialBoard() {
+        const b = Array(6).fill().map(() => Array(6).fill(EMPTY));
+        b[0] = [W_LEAPER, W_BISHOP, W_QUEEN, W_KING, W_KNIGHT, W_ROOK];
+        b[1] = [W_PAWN, W_PAWN, W_PAWN, W_PAWN, W_PAWN, W_PAWN];
+        b[4] = [B_PAWN, B_PAWN, B_PAWN, B_PAWN, B_PAWN, B_PAWN];
+        b[5] = [B_LEAPER, B_BISHOP, B_QUEEN, B_KING, B_KNIGHT, B_ROOK];
+        return b;
+      }
+
+      function getPositionHash(b) {
+        return JSON.stringify(b);
+      }
+
+      function inBounds(row, col) {
+        return row >= 0 && row < 6 && col >= 0 && col < 6;
+      }
+
+      function isEnemy(piece, color) {
+        if (piece === EMPTY) return false;
+        return (piece > 0) !== (color > 0);
+      }
+
+      function isAlly(piece, color) {
+        if (piece === EMPTY) return false;
+        return (piece > 0) === (color > 0);
+      }
+
+      function getPawnMoves(b, row, col, piece) {
+        const moves = [];
+        const direction = piece > 0 ? 1 : -1;
+
+        const newRow = row + direction;
+        if (inBounds(newRow, col) && b[newRow][col] === EMPTY) {
+          moves.push([newRow, col]);
+        }
+
+        for (const dc of [-1, 1]) {
+          const newCol = col + dc;
+          if (inBounds(row, newCol) && b[row][newCol] === EMPTY) {
+            moves.push([row, newCol]);
+          }
+        }
+
+        for (const dc of [-1, 1]) {
+          const newCol = col + dc;
+          if (inBounds(newRow, newCol) && isEnemy(b[newRow][newCol], piece)) {
+            moves.push([newRow, newCol]);
+          }
+        }
+
+        return moves;
+      }
+
+      function getKnightMoves(b, row, col, piece) {
+        const moves = [];
+        for (const [dr, dc] of KNIGHT_MOVES) {
+          const newRow = row + dr;
+          const newCol = col + dc;
+          if (inBounds(newRow, newCol)) {
+            const target = b[newRow][newCol];
+            if (target === EMPTY || isEnemy(target, piece)) {
+              moves.push([newRow, newCol]);
+            }
+          }
+        }
+        return moves;
+      }
+
+      function getBishopMoves(b, row, col, piece) {
+        const moves = [];
+
+        for (const [dr, dc] of DIRECTIONS_4_DIAG) {
+          for (let dist = 1; dist <= 3; dist++) {
+            const newRow = row + dr * dist;
+            const newCol = col + dc * dist;
+            if (!inBounds(newRow, newCol)) break;
+            const target = b[newRow][newCol];
+            if (target === EMPTY) {
+              moves.push([newRow, newCol]);
+            } else if (isEnemy(target, piece)) {
+              moves.push([newRow, newCol]);
+              break;
+            } else {
+              break;
+            }
+          }
+        }
+
+        for (const [dr, dc] of DIRECTIONS_4_ORTHO) {
+          const newRow = row + dr;
+          const newCol = col + dc;
+          if (inBounds(newRow, newCol)) {
+            const target = b[newRow][newCol];
+            if (target === EMPTY || isEnemy(target, piece)) {
+              moves.push([newRow, newCol]);
+            }
+          }
+        }
+
+        return moves;
+      }
+
+      function getRookMoves(b, row, col, piece) {
+        const moves = [];
+
+        for (const [dr, dc] of DIRECTIONS_4_ORTHO) {
+          for (let dist = 1; dist <= 3; dist++) {
+            const newRow = row + dr * dist;
+            const newCol = col + dc * dist;
+            if (!inBounds(newRow, newCol)) break;
+            const target = b[newRow][newCol];
+            if (target === EMPTY) {
+              moves.push([newRow, newCol]);
+            } else if (isEnemy(target, piece)) {
+              moves.push([newRow, newCol]);
+              break;
+            } else {
+              break;
+            }
+          }
+        }
+
+        for (const [dr, dc] of DIRECTIONS_4_DIAG) {
+          const newRow = row + dr;
+          const newCol = col + dc;
+          if (inBounds(newRow, newCol)) {
+            const target = b[newRow][newCol];
+            if (target === EMPTY || isEnemy(target, piece)) {
+              moves.push([newRow, newCol]);
+            }
+          }
+        }
+
+        return moves;
+      }
+
+      function getLeaperMoves(b, row, col, piece) {
+        const moves = [];
+
+        for (const [dr, dc] of DIRECTIONS_8) {
+          const newRow = row + dr;
+          const newCol = col + dc;
+          if (inBounds(newRow, newCol)) {
+            const target = b[newRow][newCol];
+            if (target === EMPTY || isEnemy(target, piece)) {
+              moves.push([newRow, newCol]);
+            }
+
+            if (target !== EMPTY) {
+              const jumpRow = row + dr * 2;
+              const jumpCol = col + dc * 2;
+              if (inBounds(jumpRow, jumpCol)) {
+                const jumpTarget = b[jumpRow][jumpCol];
+                if (jumpTarget === EMPTY || isEnemy(jumpTarget, piece)) {
+                  moves.push([jumpRow, jumpCol]);
+                }
+              }
+            }
+          }
+        }
+
+        return moves;
+      }
+
+      function getQueenMoves(b, row, col, piece) {
+        const moves = [];
+        for (const [dr, dc] of DIRECTIONS_8) {
+          for (let dist = 1; dist <= 3; dist++) {
+            const newRow = row + dr * dist;
+            const newCol = col + dc * dist;
+            if (!inBounds(newRow, newCol)) break;
+            const target = b[newRow][newCol];
+            if (target === EMPTY) {
+              moves.push([newRow, newCol]);
+            } else if (isEnemy(target, piece)) {
+              moves.push([newRow, newCol]);
+              break;
+            } else {
+              break;
+            }
+          }
+        }
+        return moves;
+      }
+
+      function getKingMoves(b, row, col, piece) {
+        const moves = [];
+        for (const [dr, dc] of DIRECTIONS_8) {
+          const newRow = row + dr;
+          const newCol = col + dc;
+          if (inBounds(newRow, newCol)) {
+            const target = b[newRow][newCol];
+            if (target === EMPTY || isEnemy(target, piece)) {
+              moves.push([newRow, newCol]);
+            }
+          }
+        }
+        return moves;
+      }
+
+      function getPseudoLegalMoves(b, row, col) {
+        const piece = b[row][col];
+        if (piece === EMPTY) return [];
+
+        const absPiece = Math.abs(piece);
+
+        if (absPiece === Math.abs(W_PAWN)) return getPawnMoves(b, row, col, piece);
+        if (absPiece === Math.abs(W_KNIGHT)) return getKnightMoves(b, row, col, piece);
+        if (absPiece === Math.abs(W_BISHOP)) return getBishopMoves(b, row, col, piece);
+        if (absPiece === Math.abs(W_ROOK)) return getRookMoves(b, row, col, piece);
+        if (absPiece === Math.abs(W_LEAPER)) return getLeaperMoves(b, row, col, piece);
+        if (absPiece === Math.abs(W_QUEEN)) return getQueenMoves(b, row, col, piece);
+        if (absPiece === Math.abs(W_KING) || absPiece === Math.abs(W_GENERAL)) {
+          return getKingMoves(b, row, col, piece);
+        }
+
+        return [];
+      }
+
+      function findKing(b, color) {
+        const targetKing = color > 0 ? W_KING : B_KING;
+        for (let row = 0; row < 6; row++) {
+          for (let col = 0; col < 6; col++) {
+            if (b[row][col] === targetKing) {
+              return [row, col];
+            }
+          }
+        }
+        return null;
+      }
+
+      function isSquareAttacked(b, row, col, byColor) {
+        for (let r = 0; r < 6; r++) {
+          for (let c = 0; c < 6; c++) {
+            const piece = b[r][c];
+            if (piece !== EMPTY && ((piece > 0) === (byColor > 0))) {
+              const moves = getPseudoLegalMoves(b, r, c);
+              if (moves.some(([mr, mc]) => mr === row && mc === col)) {
+                return true;
+              }
+            }
+          }
+        }
+        return false;
+      }
+
+      function isInCheck(b, color) {
+        const kingPos = findKing(b, color);
+        if (!kingPos) return false;
+        return isSquareAttacked(b, kingPos[0], kingPos[1], -color);
+      }
+
+      function getAllLegalMoves(b, currentTurn) {
+        const legalMoves = [];
+        for (let row = 0; row < 6; row++) {
+          for (let col = 0; col < 6; col++) {
+            const piece = b[row][col];
+            if (piece !== EMPTY && ((piece > 0) === (currentTurn > 0))) {
+              const moves = getPseudoLegalMoves(b, row, col);
+              for (const [toRow, toCol] of moves) {
+                const newBoard = b.map(r => [...r]);
+                newBoard[toRow][toCol] = piece;
+                newBoard[row][col] = EMPTY;
+
+                if (Math.abs(piece) === Math.abs(W_PAWN)) {
+                  if ((piece > 0 && toRow === 5) || (piece < 0 && toRow === 0)) {
+                    newBoard[toRow][toCol] = piece > 0 ? W_GENERAL : B_GENERAL;
+                  }
+                }
+
+                if (!isInCheck(newBoard, currentTurn)) {
+                  legalMoves.push([row, col, toRow, toCol]);
+                }
+              }
+            }
+          }
+        }
+        return legalMoves;
+      }
+
+      // 평가 함수
+      function evaluatePosition(b) {
+        let score = 0;
+
+        // 1. 기물 가치
+        for (let row = 0; row < 6; row++) {
+          for (let col = 0; col < 6; col++) {
+            score += PIECE_VALUES[b[row][col]] || 0;
+          }
+        }
+
+        // 2. 중앙 장악
+        for (let row = 0; row < 6; row++) {
+          for (let col = 0; col < 6; col++) {
+            const piece = b[row][col];
+            const absPiece = Math.abs(piece);
+            if (absPiece === Math.abs(W_PAWN) || absPiece === Math.abs(W_KNIGHT) || absPiece === Math.abs(W_LEAPER)) {
+              const key = `${row},${col}`;
+              if (CENTER_SQUARES.has(key)) {
+                score += piece > 0 ? 0.2 : -0.2;
+              } else if (SEMI_CENTER.has(key)) {
+                score += piece > 0 ? 0.1 : -0.1;
+              }
+            }
+          }
+        }
+
+        // 3. 이동성 (의사합법수만 계산 - 빠름)
+        let whiteMobility = 0;
+        let blackMobility = 0;
+        for (let row = 0; row < 6; row++) {
+          for (let col = 0; col < 6; col++) {
+            const piece = b[row][col];
+            if (piece !== EMPTY) {
+              const moves = getPseudoLegalMoves(b, row, col);
+              if (piece > 0) {
+                whiteMobility += moves.length;
+              } else {
+                blackMobility += moves.length;
+              }
+            }
+          }
+        }
+        score += (whiteMobility - blackMobility) * 0.05;
+
+        // 4. 폰 진행도
+        for (let row = 0; row < 6; row++) {
+          for (let col = 0; col < 6; col++) {
+            const piece = b[row][col];
+            if (Math.abs(piece) === Math.abs(W_PAWN)) {
+              if (piece > 0) {
+                score += Math.max(0, (row - 1) * 0.15);
+              } else {
+                score -= Math.max(0, (4 - row) * 0.15);
+              }
+            }
+          }
+        }
+
+        return score;
+      }
+
+      // 무브 오더링
+      function orderMoves(b, moves) {
+        return moves.sort((a, b) => {
+          const [fr1, fc1, tr1, tc1] = a;
+          const [fr2, fc2, tr2, tc2] = b;
+
+          const cap1 = b[tr1][tc1] !== EMPTY ? Math.abs(PIECE_VALUES[b[tr1][tc1]]) : 0;
+          const cap2 = b[tr2][tc2] !== EMPTY ? Math.abs(PIECE_VALUES[b[tr2][tc2]]) : 0;
+
+          if (cap1 !== cap2) return cap2 - cap1;
+
+          const center1 = CENTER_SQUARES.has(`${tr1},${tc1}`) ? 1 : 0;
+          const center2 = CENTER_SQUARES.has(`${tr2},${tc2}`) ? 1 : 0;
+
+          return center2 - center1;
+        });
+      }
+
+      // 미니맥스
+      function minimax(b, depth, alpha, beta, maximizing) {
+        if (depth === 0) {
+          return [evaluatePosition(b), null];
+        }
+
+        const currentTurn = maximizing ? 1 : -1;
+        const allMoves = getAllLegalMoves(b, currentTurn);
+
+        if (allMoves.length === 0) {
+          if (isInCheck(b, currentTurn)) {
+            return [currentTurn === 1 ? -10000 : 10000, null];
+          }
+          return [0, null];
+        }
+
+        const orderedMoves = orderMoves(b, allMoves);
+        let bestMove = null;
+
+        if (maximizing) {
+          let maxEval = -Infinity;
+          for (const move of orderedMoves) {
+            const [fromRow, fromCol, toRow, toCol] = move;
+            const newBoard = b.map(r => [...r]);
+            const piece = newBoard[fromRow][fromCol];
+
+            newBoard[toRow][toCol] = piece;
+            newBoard[fromRow][fromCol] = EMPTY;
+
+            if (Math.abs(piece) === Math.abs(W_PAWN)) {
+              if ((piece > 0 && toRow === 5) || (piece < 0 && toRow === 0)) {
+                newBoard[toRow][toCol] = piece > 0 ? W_GENERAL : B_GENERAL;
+              }
+            }
+
+            const [evalScore] = minimax(newBoard, depth - 1, alpha, beta, false);
+
+            if (evalScore > maxEval) {
+              maxEval = evalScore;
+              bestMove = move;
+            }
+            alpha = Math.max(alpha, evalScore);
+            if (beta <= alpha) break;
+          }
+          return [maxEval, bestMove];
+        } else {
+          let minEval = Infinity;
+          for (const move of orderedMoves) {
+            const [fromRow, fromCol, toRow, toCol] = move;
+            const newBoard = b.map(r => [...r]);
+            const piece = newBoard[fromRow][fromCol];
+
+            newBoard[toRow][toCol] = piece;
+            newBoard[fromRow][fromCol] = EMPTY;
+
+            if (Math.abs(piece) === Math.abs(W_PAWN)) {
+              if ((piece > 0 && toRow === 5) || (piece < 0 && toRow === 0)) {
+                newBoard[toRow][toCol] = piece > 0 ? W_GENERAL : B_GENERAL;
+              }
+            }
+
+            const [evalScore] = minimax(newBoard, depth - 1, alpha, beta, true);
+
+            if (evalScore < minEval) {
+              minEval = evalScore;
+              bestMove = move;
+            }
+            beta = Math.min(beta, evalScore);
+            if (beta <= alpha) break;
+          }
+          return [minEval, bestMove];
+        }
+      }
+
+      function getBestMove(b, currentTurn) {
+        const maximizing = currentTurn === 1;
+        return minimax(b, 2, -Infinity, Infinity, maximizing);
+      }
+
+      function handleSquareClick(row, col) {
+        if (gameOver || isAiThinking) return;
+        if (gameMode === 'ai' && turn !== playerColor) return;
+
+        const piece = board[row][col];
+
+        if (selectedSquare) {
+          const [fromRow, fromCol] = selectedSquare;
+          const isLegalMove = legalMoves.some(([mr, mc]) => mr === row && mc === col);
+
+          if (isLegalMove) {
+            makeMove(fromRow, fromCol, row, col);
+            setSelectedSquare(null);
+            setLegalMoves([]);
+            return;
+          }
+        }
+
+        if (piece !== EMPTY && ((piece > 0) === (turn > 0))) {
+          setSelectedSquare([row, col]);
+          const moves = getPseudoLegalMoves(board, row, col);
+
+          const legal = moves.filter(([toRow, toCol]) => {
+            const newBoard = board.map(r => [...r]);
+            newBoard[toRow][toCol] = piece;
+            newBoard[row][col] = EMPTY;
+
+            if (Math.abs(piece) === Math.abs(W_PAWN)) {
+              if ((piece > 0 && toRow === 5) || (piece < 0 && toRow === 0)) {
+                newBoard[toRow][toCol] = piece > 0 ? W_GENERAL : B_GENERAL;
+              }
+            }
+
+            return !isInCheck(newBoard, turn);
+          });
+
+          setLegalMoves(legal);
+        } else {
+          setSelectedSquare(null);
+          setLegalMoves([]);
+        }
+      }
+
+      function makeMove(fromRow, fromCol, toRow, toCol) {
+        const newBoard = board.map(r => [...r]);
+        const piece = newBoard[fromRow][fromCol];
+        const captured = newBoard[toRow][toCol];
+
+        newBoard[toRow][toCol] = piece;
+        newBoard[fromRow][fromCol] = EMPTY;
+
+        if (Math.abs(piece) === Math.abs(W_PAWN)) {
+          if ((piece > 0 && toRow === 5) || (piece < 0 && toRow === 0)) {
+            newBoard[toRow][toCol] = piece > 0 ? W_GENERAL : B_GENERAL;
+          }
+        }
+
+        let newHalfmove = halfmoveClock + 1;
+        if (Math.abs(piece) === Math.abs(W_PAWN) || captured !== EMPTY) {
+          newHalfmove = 0;
+        }
+
+        setBoard(newBoard);
+        setTurn(-turn);
+        setMoveHistory([...moveHistory, [fromRow, fromCol, toRow, toCol, captured]]);
+        setBoardHistory([...boardHistory, newBoard]);
+        setTurnHistory([...turnHistory, -turn]);
+        setPositionHistory([...positionHistory, getPositionHash(newBoard)]);
+        setHalfmoveClock(newHalfmove);
+        setHalfmoveHistory([...halfmoveHistory, newHalfmove]);
+
+        checkGameOver(newBoard, -turn, [...positionHistory, getPositionHash(newBoard)], newHalfmove);
+      }
+
+      function checkGameOver(b, currentTurn, posHist, halfmove) {
+        const allMoves = getAllLegalMoves(b, currentTurn);
+        const inCheck = isInCheck(b, currentTurn);
+
+        if (allMoves.length === 0) {
+          if (inCheck) {
+            const winner = currentTurn === 1 ? '흑' : '백';
+            setGameOver(`체크메이트! ${winner} 승리!`);
+          } else {
+            setGameOver('스테일메이트! 무승부');
+          }
+          return;
+        }
+
+        const currentPos = getPositionHash(b);
+        const count = posHist.filter(p => p === currentPos).length;
+        if (count >= 3) {
+          setGameOver('3회 반복! 무승부');
+          return;
+        }
+
+        if (halfmove >= 50) {
+          setGameOver('50수 룰! 무승부');
+          return;
+        }
+      }
+
+      function resetGame() {
+        const initial = createInitialBoard();
+        setBoard(initial);
+        setTurn(1);
+        setSelectedSquare(null);
+        setLegalMoves([]);
+        setMoveHistory([]);
+        setBoardHistory([initial]);
+        setTurnHistory([1]);
+        setPositionHistory([getPositionHash(initial)]);
+        setHalfmoveClock(0);
+        setHalfmoveHistory([0]);
+        setGameOver(null);
+        setGameMode(null);
+        setPlayerColor(null);
+        setIsAiThinking(false);
+      }
+
+      function undoMove() {
+        if (moveHistory.length === 0) return;
+
+        const newMoveHistory = moveHistory.slice(0, -1);
+        const newBoardHistory = boardHistory.slice(0, -1);
+        const newTurnHistory = turnHistory.slice(0, -1);
+        const newPositionHistory = positionHistory.slice(0, -1);
+        const newHalfmoveHistory = halfmoveHistory.slice(0, -1);
+
+        setBoard(newBoardHistory[newBoardHistory.length - 1]);
+        setTurn(newTurnHistory[newTurnHistory.length - 1]);
+        setMoveHistory(newMoveHistory);
+        setBoardHistory(newBoardHistory);
+        setTurnHistory(newTurnHistory);
+        setPositionHistory(newPositionHistory);
+        setHalfmoveClock(newHalfmoveHistory[newHalfmoveHistory.length - 1]);
+        setHalfmoveHistory(newHalfmoveHistory);
+        setSelectedSquare(null);
+        setLegalMoves([]);
+        setGameOver(null);
+      }
+
+      // AI 자동 수 실행
+      useEffect(() => {
+        if (gameMode === 'ai' && !gameOver && !isAiThinking && playerColor !== null && turn !== playerColor) {
+          console.log('AI 차례 시작:', { turn, playerColor });
+          setIsAiThinking(true);
+
+          // 현재 보드 상태를 캡처
+          const currentBoard = board;
+          const currentTurn = turn;
+
+          // 비동기로 AI 수 계산 및 실행
+          const timer = setTimeout(() => {
+            console.log('AI 계산 시작...');
+            const startTime = performance.now();
+
+            const [score, bestMove] = getBestMove(currentBoard, currentTurn);
+
+            const endTime = performance.now();
+            console.log(`AI 계산 완료 (${(endTime - startTime).toFixed(0)}ms):`, { score, bestMove });
+
+            if (bestMove) {
+              makeMove(bestMove[0], bestMove[1], bestMove[2], bestMove[3]);
+            } else {
+              console.error('AI가 수를 찾지 못했습니다!');
+            }
+            setIsAiThinking(false);
+          }, 100);
+
+          return () => clearTimeout(timer);
+        }
+      }, [turn, gameMode, playerColor, gameOver, isAiThinking]);
+
+      function startGame(mode) {
+        setGameMode(mode);
+        if (mode === 'solo') {
+          setPlayerColor(null);
+        }
+      }
+
+      function selectColor(color) {
+        setPlayerColor(color);
+      }
+
+      const files = ['a', 'b', 'c', 'd', 'e', 'f'];
+
+      function getCapturedPieces() {
+        const whiteCaptured = {};
+        const blackCaptured = {};
+
+        moveHistory.forEach(([fromRow, fromCol, toRow, toCol, captured]) => {
+          if (captured !== EMPTY) {
+            const pieceName = PIECE_NAMES[captured];
+            if (captured > 0) {
+              whiteCaptured[pieceName] = (whiteCaptured[pieceName] || 0) + 1;
+            } else {
+              blackCaptured[pieceName] = (blackCaptured[pieceName] || 0) + 1;
+            }
+          }
+        });
+
+        return { whiteCaptured, blackCaptured };
+      }
+
+      function renderCaptured(captured, color) {
+        const pieces = Object.entries(captured).map(([piece, count]) => {
+          return count > 1 ? `${piece}×${count}` : piece;
+        });
+
+        return (
+          <div className={`flex gap-2 text-sm ${color === 'white' ? 'text-blue-300' : 'text-red-300'}`}>
+            {pieces.length > 0 ? pieces.join(' ') : '—'}
+          </div>
+        );
+      }
+
+      const { whiteCaptured, blackCaptured } = getCapturedPieces();
+
+      if (gameMode === null) {
+        return (
+          <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-slate-800 to-slate-900 p-8">
+            <h1 className="text-5xl font-bold text-white mb-12">6×6 변형 체스</h1>
+            <div className="flex gap-6">
+              <button
+                onClick={() => startGame('solo')}
+                className="px-12 py-6 bg-blue-600 hover:bg-blue-700 text-white text-2xl rounded-xl font-semibold shadow-lg transition-all hover:scale-105"
+              >
+                혼자서 두기
+              </button>
+              <button
+                onClick={() => startGame('ai')}
+                className="px-12 py-6 bg-purple-600 hover:bg-purple-700 text-white text-2xl rounded-xl font-semibold shadow-lg transition-all hover:scale-105"
+              >
+                AI와 두기
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      if (gameMode === 'ai' && playerColor === null) {
+        return (
+          <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-slate-800 to-slate-900 p-8">
+            <h1 className="text-4xl font-bold text-white mb-4">색상 선택</h1>
+            <p className="text-slate-300 mb-8">어떤 색으로 플레이하시겠습니까?</p>
+            <div className="flex gap-6">
+              <button
+                onClick={() => selectColor(1)}
+                className="px-10 py-5 bg-blue-500 hover:bg-blue-600 text-white text-xl rounded-xl font-semibold shadow-lg transition-all hover:scale-105"
+              >
+                백 (선공)
+              </button>
+              <button
+                onClick={() => selectColor(-1)}
+                className="px-10 py-5 bg-red-500 hover:bg-red-600 text-white text-xl rounded-xl font-semibold shadow-lg transition-all hover:scale-105"
+              >
+                흑 (후공)
+              </button>
+              <button
+                onClick={() => selectColor(Math.random() < 0.5 ? 1 : -1)}
+                className="px-10 py-5 bg-slate-600 hover:bg-slate-700 text-white text-xl rounded-xl font-semibold shadow-lg transition-all hover:scale-105"
+              >
+                랜덤
+              </button>
+            </div>
+            <button
+              onClick={() => setGameMode(null)}
+              className="mt-8 px-6 py-2 bg-slate-700 hover:bg-slate-800 text-slate-300 rounded-lg"
+            >
+              ← 돌아가기
+            </button>
+          </div>
+        );
+      }
+
+      return (
+        <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-slate-800 to-slate-900 p-8">
+          <div className="mb-6 text-center">
+            <h1 className="text-4xl font-bold text-white mb-2">6×6 변형 체스</h1>
+            <div className="text-xl text-slate-300">
+              {gameOver ? (
+                <div className="text-yellow-400 font-bold">{gameOver}</div>
+              ) : isAiThinking ? (
+                <div className="text-purple-400">AI 생각 중...</div>
+              ) : (
+                <div>현재 차례: <span className={turn === 1 ? 'text-blue-400' : 'text-red-400'}>
+                  {turn === 1 ? '백' : '흑'}
+                </span></div>
+              )}
+            </div>
+            <div className="mt-4 flex gap-3">
+              {gameOver && (
+                <button
+                  onClick={resetGame}
+                  className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold"
+                >
+                  새 게임
+                </button>
+              )}
+              <button
+                onClick={undoMove}
+                disabled={moveHistory.length === 0}
+                className="px-6 py-2 bg-slate-600 hover:bg-slate-700 text-white rounded-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                무르기
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-slate-700 p-4 rounded-lg shadow-2xl">
+            <div className="mb-3 px-8 h-6 flex items-center">
+              <span className="text-slate-400 text-xs mr-2">잡힌 백:</span>
+              {renderCaptured(whiteCaptured, 'white')}
+            </div>
+
+            <div className="mb-2 flex justify-around px-8">
+              {files.map(f => (
+                <div key={f} className="text-slate-300 font-mono text-sm w-16 text-center">{f}</div>
+              ))}
+            </div>
+
+            {[5, 4, 3, 2, 1, 0].map((row) => (
+              <div key={row} className="flex items-center">
+                <div className="text-slate-300 font-mono text-sm w-8 text-center">{row + 1}</div>
+                {[0, 1, 2, 3, 4, 5].map((col) => {
+                  const piece = board[row][col];
+                  const isSelected = selectedSquare && selectedSquare[0] === row && selectedSquare[1] === col;
+                  const isLegalMove = legalMoves.some(([mr, mc]) => mr === row && mc === col);
+                  const isDark = (row + col) % 2 === 1;
+
+                  return (
+                    <div
+                      key={`${row}-${col}`}
+                      onClick={() => handleSquareClick(row, col)}
+                      className={`
+                        w-16 h-16 flex items-center justify-center cursor-pointer
+                        border border-slate-600 relative
+                        ${isDark ? 'bg-slate-600' : 'bg-slate-400'}
+                        ${isSelected ? 'ring-4 ring-yellow-400' : ''}
+                        ${isLegalMove ? 'ring-2 ring-green-400' : ''}
+                        hover:brightness-110 transition-all
+                      `}
+                    >
+                      {isLegalMove && (
+                        <div className="absolute inset-0 bg-green-400 opacity-30 rounded-full m-4"></div>
+                      )}
+                      {piece !== EMPTY && (
+                        <div className={`
+                          text-2xl font-bold z-10
+                          ${piece > 0 ? 'text-blue-200' : 'text-red-300'}
+                          ${isSelected ? 'scale-110' : ''}
+                          transition-transform
+                        `}>
+                          {PIECE_NAMES[piece]}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <div className="text-slate-300 font-mono text-sm w-8 text-center">{row + 1}</div>
+              </div>
+            ))}
+
+            <div className="mt-2 flex justify-around px-8">
+              {files.map(f => (
+                <div key={f} className="text-slate-300 font-mono text-sm w-16 text-center">{f}</div>
+              ))}
+            </div>
+
+            <div className="mt-3 px-8 h-6 flex items-center">
+              <span className="text-slate-400 text-xs mr-2">잡힌 흑:</span>
+              {renderCaptured(blackCaptured, 'black')}
+            </div>
+          </div>
+
+          <div className="mt-6 text-slate-300 text-sm max-w-md text-center">
+            <div className="mb-2">
+              <span className="text-blue-300 font-bold">백(청)</span>: P(폰) N(나이트) B(비숍) R(룩) L(리퍼) Q(퀸) K(킹) G(장군)
+            </div>
+            <div>
+              <span className="text-red-300 font-bold">흑(적)</span>: P(폰) N(나이트) B(비숍) R(룩) L(리퍼) Q(퀸) K(킹) G(장군)
+            </div>
+          </div>
+        </div>
+      );
+    };
+
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<VariantChess />);
   </script>
