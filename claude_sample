@@ -638,7 +638,7 @@ const VariantChess = () => {
         setIsAiThinking(false);
       }, 300);
     }
-  }, [turn, gameMode, playerColor, gameOver]);
+  }, [board, turn, gameMode, playerColor, gameOver, isAiThinking]);
 
   function startGame(mode) {
     setGameMode(mode);
