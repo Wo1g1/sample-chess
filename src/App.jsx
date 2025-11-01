@@ -122,35 +122,35 @@ const App = () => {
   // AI 자동 수 실행
   useEffect(() => {
     if (!engineReady) return;
-    if (gameMode === 'ai' && !gameOver && !isAiThinking && playerColor !== null && turn !== playerColor) {
-      console.log('🤖 AI 차례 시작:', { turn, playerColor });
-      setIsAiThinking(true);
+    if (gameMode !== 'ai' || gameOver || isAiThinking || playerColor === null || turn === playerColor) return;
 
-      // 비동기로 AI 수 계산 및 실행
-      const timer = setTimeout(() => {
-        console.log('🧠 AI 계산 시작... (depth 12)');
-        const startTime = performance.now();
+    console.log('🤖 AI 차례 시작:', { turn, playerColor });
+    setIsAiThinking(true);
 
-        const bestMove = engine.getBestMove(12); // depth 12!
-        const evaluation = engine.getEvaluation();
+    // 비동기로 AI 수 계산 및 실행
+    const timer = setTimeout(() => {
+      console.log('🧠 AI 계산 시작... (depth 12)');
+      const startTime = performance.now();
 
-        const endTime = performance.now();
-        console.log(`✅ AI 계산 완료 (${(endTime - startTime).toFixed(0)}ms)`);
-        console.log(`평가: ${evaluation.toFixed(2)}, 최선의 수:`, bestMove);
+      const bestMove = engine.getBestMove(12); // depth 12!
+      const evaluation = engine.getEvaluation();
 
-        if (bestMove) {
-          const [fromRow, fromCol, toRow, toCol] = bestMove;
-          makeMove(fromRow, fromCol, toRow, toCol);
-        } else {
-          console.error('❌ AI가 수를 찾지 못했습니다!');
-        }
+      const endTime = performance.now();
+      console.log(`✅ AI 계산 완료 (${(endTime - startTime).toFixed(0)}ms)`);
+      console.log(`평가: ${evaluation.toFixed(2)}, 최선의 수:`, bestMove);
 
-        setIsAiThinking(false);
-      }, 100);
+      if (bestMove) {
+        const [fromRow, fromCol, toRow, toCol] = bestMove;
+        makeMove(fromRow, fromCol, toRow, toCol);
+      } else {
+        console.error('❌ AI가 수를 찾지 못했습니다!');
+      }
 
-      return () => clearTimeout(timer);
-    }
-  }, [engineReady, turn, gameMode, playerColor, gameOver, isAiThinking]);
+      setIsAiThinking(false);
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [engineReady, turn, gameMode, playerColor, gameOver]);
 
   function startGame(mode) {
     setGameMode(mode);
