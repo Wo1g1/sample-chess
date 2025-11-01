@@ -190,7 +190,9 @@ class FairyEngine {
       'P': 1, 'N': 2, 'B': 3, 'R': 4, 'L': 5, 'Q': 6, 'K': 7, 'G': 8
     };
 
-    // FEN은 8행(rank 8)부터 1행까지, 우리는 5행부터 0행까지
+    // FEN은 최상단(rank 6)부터 최하단(rank 1)까지
+    // ranks[0] = rank 6, ranks[5] = rank 1
+    // board[0] = rank 1 (최하단), board[5] = rank 6 (최상단)
     for (let rank = 0; rank < 6; rank++) {
       let file = 0;
       const fenRank = ranks[5 - rank]; // FEN 순서 뒤집기
