@@ -14,8 +14,16 @@ class FairyEngine {
     try {
       console.log('Fairy-Stockfish 초기화 중...');
 
-      // ffish-es6 모듈 로드
-      this.ffish = await new Module();
+      // ffish-es6 모듈 로드 (WASM 파일 경로 지정)
+      this.ffish = await new Module({
+        locateFile: (path) => {
+          if (path.endsWith('.wasm')) {
+            // GitHub Pages base path 고려
+            return import.meta.env.BASE_URL + path;
+          }
+          return path;
+        }
+      });
 
       // 변형 규칙 로드
       this.ffish.loadVariantConfig(variantConfig);
