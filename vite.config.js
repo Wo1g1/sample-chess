@@ -10,6 +10,12 @@ export default defineConfig({
     topLevelAwait()
   ],
   base: '/sample-chess/',
+  server: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp'
+    }
+  },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
