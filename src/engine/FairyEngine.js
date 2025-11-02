@@ -38,7 +38,15 @@ class FairyEngine {
       console.log('시작 FEN:', this.board.fen());
 
       // 2. fairy-stockfish-nnue.wasm 엔진 로드 (AI용)
-      this.engine = await Stockfish();
+      this.engine = await Stockfish({
+        locateFile: (path) => {
+          // stockfish.wasm과 stockfish.worker.js를 public 폴더에서 로드
+          if (path.endsWith('.wasm') || path.endsWith('.worker.js')) {
+            return import.meta.env.BASE_URL + path;
+          }
+          return path;
+        }
+      });
 
       // 변형 규칙을 가상 파일시스템에 저장
       if (this.engine.FS) {

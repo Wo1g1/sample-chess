@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "cp node_modules/fairy-stockfish-nnue.wasm/stockfish.wasm public/ && cp node_modules/fairy-stockfish-nnue.wasm/stockfish.worker.js public/",
     "build": "vite build",
     "preview": "vite preview"
   },
