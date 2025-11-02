@@ -128,16 +128,15 @@ const App = () => {
     setIsAiThinking(true);
 
     // 비동기로 AI 수 계산 및 실행
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       console.log('🧠 AI 계산 시작... (depth 12)');
       const startTime = performance.now();
 
-      const bestMove = engine.getBestMove(12); // depth 12!
-      const evaluation = engine.getEvaluation();
+      const bestMove = await engine.getBestMove(12); // depth 12!
 
       const endTime = performance.now();
       console.log(`✅ AI 계산 완료 (${(endTime - startTime).toFixed(0)}ms)`);
-      console.log(`평가: ${evaluation.toFixed(2)}, 최선의 수:`, bestMove);
+      console.log(`최선의 수:`, bestMove);
 
       if (bestMove) {
         const [fromRow, fromCol, toRow, toCol] = bestMove;

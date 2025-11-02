@@ -1,24 +1,28 @@
 // Fairy-Stockfish WASM Engine Wrapper
+// Uses ffish-es6 for board management and fairy-stockfish-nnue.wasm for AI
 import Module from 'ffish-es6';
+import Stockfish from 'fairy-stockfish-nnue.wasm/stockfish.js';
 import variantConfig from './variant-config.ini?raw';
 
 class FairyEngine {
   constructor() {
     this.ffish = null;
     this.board = null;
+    this.engine = null; // UCI engine for AI
     this.ready = false;
     this.variantName = 'CustomChess6x6';
+    this.messageQueue = [];
+    this.waitingForMessage = null;
   }
 
   async initialize() {
     try {
       console.log('Fairy-Stockfish 초기화 중...');
 
-      // ffish-es6 모듈 로드 (WASM 파일 경로 지정)
+      // 1. ffish-es6 모듈 로드 (보드 관리용)
       this.ffish = await new Module({
         locateFile: (path) => {
           if (path.endsWith('.wasm')) {
-            // GitHub Pages base path 고려
             return import.meta.env.BASE_URL + path;
           }
           return path;
@@ -27,20 +31,97 @@ class FairyEngine {
 
       // 변형 규칙 로드
       this.ffish.loadVariantConfig(variantConfig);
-      console.log('변형 규칙 로드 완료:', this.variantName);
+      console.log('✅ ffish-es6 변형 규칙 로드 완료:', this.variantName);
 
       // 보드 생성
       this.board = new this.ffish.Board(this.variantName);
+      console.log('시작 FEN:', this.board.fen());
+
+      // 2. fairy-stockfish-nnue.wasm 엔진 로드 (AI용)
+      this.engine = await Stockfish();
+
+      // 변형 규칙을 가상 파일시스템에 저장
+      if (this.engine.FS) {
+        this.engine.FS.writeFile('variants.ini', variantConfig);
+        console.log('✅ 변형 규칙을 가상 FS에 저장 완료');
+      }
+
+      // UCI 메시지 리스너 설정
+      this.engine.addMessageListener((line) => {
+        console.log('UCI <-', line);
+        this.handleEngineMessage(line);
+      });
+
+      // UCI 프로토콜 초기화
+      await this.sendCommand('uci');
+      await this.waitForMessage('uciok');
+      console.log('✅ UCI 프로토콜 초기화 완료');
+
+      // 변형 규칙 파일 경로 설정
+      await this.sendCommand('setoption name VariantPath value variants.ini');
+
+      // 변형 선택
+      await this.sendCommand(`setoption name UCI_Variant value ${this.variantName}`);
+
+      await this.sendCommand('isready');
+      await this.waitForMessage('readyok');
+      console.log('✅ Fairy-Stockfish AI 엔진 준비 완료');
 
       this.ready = true;
-      console.log('✅ Fairy-Stockfish 초기화 완료!');
-      console.log('시작 FEN:', this.board.fen());
+      console.log('✅ 전체 초기화 완료!');
 
       return true;
     } catch (error) {
       console.error('❌ Fairy-Stockfish 초기화 실패:', error);
       return false;
     }
+  }
+
+  // UCI 명령 전송
+  sendCommand(command) {
+    console.log('UCI ->', command);
+    this.engine.postMessage(command);
+  }
+
+  // UCI 메시지 수신 처리
+  handleEngineMessage(line) {
+    this.messageQueue.push(line);
+
+    // 대기 중인 프로미스가 있으면 처리
+    if (this.waitingForMessage) {
+      const { pattern, resolve } = this.waitingForMessage;
+
+      if (line.startsWith(pattern)) {
+        this.waitingForMessage = null;
+        resolve(line);
+      }
+    }
+  }
+
+  // 특정 메시지 대기
+  waitForMessage(pattern, timeout = 10000) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.waitingForMessage = null;
+        reject(new Error(`Timeout waiting for: ${pattern}`));
+      }, timeout);
+
+      this.waitingForMessage = {
+        pattern,
+        resolve: (line) => {
+          clearTimeout(timer);
+          resolve(line);
+        }
+      };
+
+      // 이미 큐에 있는지 확인
+      const existingMessage = this.messageQueue.find(msg => msg.startsWith(pattern));
+      if (existingMessage) {
+        clearTimeout(timer);
+        this.waitingForMessage = null;
+        resolve(existingMessage);
+      }
+    });
   }
 
   // 합법 수 목록 반환 (UCI 형식: "e2e4" 등)
@@ -94,40 +175,39 @@ class FairyEngine {
     }
   }
 
-  // AI 최선의 수 계산
-  getBestMove(depth = 12) {
+  // AI 최선의 수 계산 (UCI 프로토콜 사용)
+  async getBestMove(depth = 12) {
     if (!this.ready) return null;
 
     const fen = this.board.fen();
+    console.log(`AI 계산 시작 (depth=${depth}):`, fen);
 
     try {
-      const bestMoveUci = this.ffish.getMove(fen, this.variantName, depth);
+      // 메시지 큐 초기화
+      this.messageQueue = [];
 
-      if (!bestMoveUci) {
+      // UCI 명령 전송
+      this.sendCommand(`position fen ${fen}`);
+      this.sendCommand(`go depth ${depth}`);
+
+      // bestmove 응답 대기 (최대 30초)
+      const response = await this.waitForMessage('bestmove', 30000);
+
+      // "bestmove e2e4" 형식에서 수 추출
+      const parts = response.split(' ');
+      const bestMoveUci = parts[1];
+
+      if (!bestMoveUci || bestMoveUci === '(none)') {
         console.warn('AI가 수를 찾지 못했습니다');
         return null;
       }
 
-      console.log('AI 최선의 수 (UCI):', bestMoveUci);
+      console.log('✅ AI 최선의 수 (UCI):', bestMoveUci);
       return this.uciToCoords(bestMoveUci);
 
     } catch (error) {
-      console.error('AI 계산 실패:', error);
+      console.error('❌ AI 계산 실패:', error);
       return null;
-    }
-  }
-
-  // 현재 보드 평가 점수
-  getEvaluation() {
-    if (!this.ready) return 0;
-
-    try {
-      const fen = this.board.fen();
-      const evalString = this.ffish.getEval(fen, this.variantName);
-      return parseFloat(evalString) || 0;
-    } catch (error) {
-      console.error('평가 실패:', error);
-      return 0;
     }
   }
 
